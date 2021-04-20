@@ -6,7 +6,7 @@ Class definition of YOLO_v3 style detection model on image and video
 import colorsys
 import os
 from timeit import default_timer as timer
-
+import math
 import numpy as np
 from keras import backend as K
 from keras.models import load_model
@@ -17,6 +17,10 @@ from yolo3.model import yolo_eval, yolo_body, tiny_yolo_body
 from yolo3.utils import letterbox_image
 import os
 from keras.utils import multi_gpu_model
+
+  
+
+
 
 class YOLO(object):
     _defaults = {
@@ -152,11 +156,15 @@ class YOLO(object):
                 text_origin = np.array([left, top + 1])
 
             # My kingdom for a good redistributable image drawing library.
-            image = np.asarray(image)
-            image.flags['WRITEABLE'] = True
-            mosaic(image, left, top, right, bottom, 8)
-            image = Image.fromarray(image)
-            '''for i in range(thickness):
+            ##image = np.asarray(image)
+            ##image.flags['WRITEABLE'] = True
+            ##mosaic part,CORE------------------&&&&&&&&&&&&&&------
+            bounds = (left, top, right, bottom)
+            image = image.filter(MyGaussianBlur(radius=29, bounds=bounds))
+            ##guassianBlur(image, left, top, right, bottom, 50, 5, 1.5)
+            ##---------------&&&&&&&&&&&&&&-------------------------
+            ##image = Image.fromarray(image)
+            for i in range(thickness):
                 draw.rectangle(
                     [left + i, top + i, right - i, bottom - i],
                     outline=self.colors[c])
@@ -164,7 +172,7 @@ class YOLO(object):
                 [tuple(text_origin), tuple(text_origin + label_size)],
                 fill=self.colors[c])
             draw.text(text_origin, label, fill=(0, 0, 0), font=font)
-            del draw '''
+            del draw
 
         end = timer()
         print(end - start)
@@ -240,3 +248,82 @@ def mosaic(img, start_y, start_x, end_y, end_x, division):
         for col in range(start_y,end_y):
             for i in range(0,3):
                 img[row][col][i] = pallette[int((row - start_x)/rangem)][int((col - start_y)/rangem)][i]
+
+
+def two_d_guassian_G(x,y,c):
+    pi = 3.1415926
+    result_G = float(math.exp(-(x**2+y**2)/(2*c**2))/(2*pi*c**2))
+    result_G = round(result_G,7)
+    return result_G
+
+##method1
+def guassianBlur(img, start_y, start_x, end_y, end_x, division, radius, c):
+    #Guassian Blur: radius means the blurring radius , c means the value of sigema
+    #division is to divide the target area into small pixel squares.
+    #---------------------------------------------------------------------
+    #the edge of each pixel:
+    rangem = int (min(end_x - start_x, end_y - start_y)/division)
+    #num of pixels in row:
+    pallette_h = int((end_x - start_x)/rangem + ((end_x - start_x) % rangem != 0))
+    #num of pixels in col:
+    pallette_w = int((end_y - start_y)/rangem + ((end_y - start_y) % rangem != 0))
+     #---------------------------------------------------------------------
+    #Set an initial 2d array weight matrix with a scale of 2radius * 2radius
+    g = [[0 for i in range(2*radius)] for j in range(2*radius)]
+    #Start tracing and calculating:
+    for row in range(0, pallette_h):
+        for col in range(0, pallette_w):
+            for x in range(start_x + row * rangem, min(start_x + (row + 1) * rangem, end_x)):
+                for y in range(start_y + col * rangem, min(start_y + (col + 1) * rangem, end_y)):
+                    for i in range(0,3): # 3 is due to that RGB are three different channels
+                      color = [0,0,0]
+                      g_total = 0
+                      # if on edges, no blurring.
+                      if row==0 or col ==0:
+                            color[i]=img[x][y][i]
+                      else:
+                        # if row/col <= radius, the new radius should be the min of them:
+                        if row <= radius or col <= radius:
+                            radius = min(row,col)
+                            
+                        # Compute each pixel's gassian percentage:
+                        for j in range (0,radius*2):
+                            for k in range (0,radius*2):
+                                g[j][k] = two_d_guassian_G(j-radius,k-radius,c)
+                                ## compute the sum of all g_weight
+                                g_total += g[j][k]
+                                
+                        #--------------------------------------------
+                        for j in range (0,radius*2):
+                            for k in range (0,radius*2):
+                                #compute the weighted sum of each R,G,B
+                                color[i] += (img[x+(row+j-radius)*rangem][y+(col+k-radius)*rangem][i])*(g[j][k]/g_total)
+                         #End Guassian blur, assign light values to this central pixel.
+                      img[row][col][i] = color[i]
+                   
+
+
+##method 2
+from PIL import Image, ImageFilter
+
+class MyGaussianBlur(ImageFilter.Filter):
+  name = "GaussianBlur"
+
+  def __init__(self, radius=2, bounds=None):
+    self.radius = radius
+    self.bounds = bounds
+
+  def filter(self, image):
+    if self.bounds:
+      clips = image.crop(self.bounds).gaussian_blur(self.radius)
+      image.paste(clips, self.bounds)
+      return image
+    else:
+      return image.gaussian_blur(self.radius)
+      
+def guassianBlur2(img, start_y, start_x, end_y, end_x, division):
+    bounds = (start_x, end_x, start_y, end_y)
+  
+    image = image.filter(MyGaussianBlur(radius=29, bounds=bounds))
+    
+    ##: link tohttps://blog.csdn.net/gangtieren/article/details/98870639
